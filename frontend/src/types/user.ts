@@ -16,4 +16,9 @@ export interface User {
   notifySms?: boolean;
   notifyBrowser?: boolean;
   notifySound?: boolean;
+  /**
+   * Linux 계정 생성이 실패했거나 지원되지 않을 때 서버가 담아 보내는 안내.
+   * 사용자 정보 수정 자체는 성공한 상태이며, 터미널을 열 때 다시 시도된다.
+   */
+  provisionWarning?: string;
 }

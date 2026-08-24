@@ -48,6 +48,8 @@ function EditUserForm({ user, onOpenChange }: { user: User; onOpenChange: (open:
     newPassword: '',
   });
   const [error, setError] = useState('');
+  // 저장은 됐지만 Linux 계정 생성이 실패한 경우의 안내
+  const [warning, setWarning] = useState('');
   const { mutateAsync, isPending } = useUpdateUser();
 
   const set = <K extends keyof typeof form>(key: K, value: typeof form[K]) =>
@@ -56,8 +58,9 @@ function EditUserForm({ user, onOpenChange }: { user: User; onOpenChange: (open:
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setWarning('');
     try {
-      await mutateAsync({
+      const result = await mutateAsync({
         id: user.id,
         data: {
           name: form.name,
@@ -67,6 +70,12 @@ function EditUserForm({ user, onOpenChange }: { user: User; onOpenChange: (open:
           ...(form.newPassword && { newPassword: form.newPassword }),
         },
       });
+
+      // 계정 생성 경고가 있으면 다이얼로그를 닫지 않고 그대로 보여준다
+      if (result?.provisionWarning) {
+        setWarning(result.provisionWarning);
+        return;
+      }
       onOpenChange(false);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '수정 실패');
@@ -114,6 +123,11 @@ function EditUserForm({ user, onOpenChange }: { user: User; onOpenChange: (open:
         <Input id="eu-pw" type="password" value={form.newPassword} onChange={(e) => set('newPassword', e.target.value)} minLength={6} placeholder="변경하지 않으면 공백으로 두세요" />
       </div>
       {error && <p className="text-sm text-red-500">{error}</p>}
+      {warning && (
+        <p className="text-sm" style={{ color: '#E0845E' }}>
+          저장은 완료됐습니다. 다만 {warning}
+        </p>
+      )}
       <DialogFooter>
         <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>취소</Button>
         <Button type="submit" disabled={isPending} className="bg-[#2D7D7B] hover:bg-[#236160] text-white">

@@ -4,6 +4,7 @@ import bcrypt from 'bcrypt';
 import { requireAdmin } from '../../plugins/auth.js';
 import { createHttpError } from '../../lib/errors.js';
 import prisma from '../../lib/prisma.js';
+import { linuxUserService } from '../../services/linux-user.service.js';
 
 /** 사용자 수정 요청 바디 */
 interface UpdateUserBody {
@@ -86,7 +87,33 @@ const userIdRoute: FastifyPluginAsync = async (fastify) => {
       },
       select: userSelect,
     });
-    return updated;
+
+    // ────────────────────────────────────────────
+    // Linux 계정 실제 생성
+    //
+    // 이전에는 linuxUser가 DB에 문자열로만 저장되고 서버에는 그 계정이
+    // 존재하지 않았다. 그래서 팀원이 터미널을 열면 없는 계정으로 실행하려다 실패했다.
+    // 관리자가 저장하는 시점에 실제로 만들어 둔다.
+    // 실패해도 사용자 정보 수정 자체는 성공 처리하고, 사유를 응답에 담아 알린다
+    // (터미널을 열 때 다시 시도되므로 복구 가능하다).
+    // ────────────────────────────────────────────
+    let provisionWarning: string | undefined;
+    const targetRole = role ?? existing.role;
+
+    if (linuxUser !== undefined && targetRole !== 'admin') {
+      if (!linuxUserService.isProvisioningSupported()) {
+        provisionWarning = 'Linux 계정 생성은 Linux 서버에서만 가능합니다. 계정명만 저장되었습니다.';
+      } else {
+        try {
+          await linuxUserService.ensureLinuxUser(id);
+        } catch (err) {
+          provisionWarning = err instanceof Error ? err.message : 'Linux 계정 생성에 실패했습니다';
+          request.log.error({ err, userId: id }, 'Linux 계정 프로비저닝 실패');
+        }
+      }
+    }
+
+    return provisionWarning ? { ...updated, provisionWarning } : updated;
   });
 
   // DELETE /:id — 사용자 삭제 (관리자 전용)

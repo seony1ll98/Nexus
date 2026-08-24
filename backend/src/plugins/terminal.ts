@@ -3,6 +3,7 @@
 import type { Server as SocketIOServer, Socket } from 'socket.io';
 import { terminalService } from '../services/terminal.service.js';
 import prisma from '../lib/prisma.js';
+import { linuxUserService } from '../services/linux-user.service.js';
 
 /** 인증된 Socket 타입 확장 */
 interface AuthenticatedSocket extends Socket {
@@ -127,18 +128,38 @@ export function registerTerminalNamespace(io: SocketIOServer): void {
 
         const isAdmin = user.role === 'admin';
 
-        // [CRITICAL] 일반 멤버는 linuxUser가 설정되어 있어야 터미널 사용 가능
-        // linuxUser 없으면 백엔드 프로세스 유저로 실행되므로 차단
-        if (!isAdmin && !user.linuxUser) {
-          socket.emit('terminal:error', {
-            error: { code: 'NO_LINUX_USER', message: '터미널 사용을 위해 관리자에게 Linux 계정 할당을 요청하세요' },
-          });
-          return;
-        }
+        // ────────────────────────────────────────────
+        // 일반 멤버는 반드시 자기 Linux 계정으로 격리 실행한다.
+        // 계정이 없으면 백엔드 프로세스 유저로 실행되어 격리가 무너지므로,
+        // 여기서 계정을 보정하고 프로젝트 접근 권한(ACL)을 부여한다.
+        // 관리자가 사용자 편집에서 저장할 때도 계정이 만들어지지만,
+        // 빠뜨렸을 경우를 대비한 자가 보정 지점이다.
+        // ────────────────────────────────────────────
+        let runAsUser: string | undefined;
 
-        // admin → 백엔드 프로세스 유저로 실행 (ubuntu)
-        // 일반 멤버 → linuxUser로 격리 실행
-        const runAsUser = isAdmin ? undefined : user.linuxUser!;
+        if (!isAdmin) {
+          if (!linuxUserService.isProvisioningSupported()) {
+            socket.emit('terminal:error', {
+              error: {
+                code: 'PROVISIONING_UNSUPPORTED',
+                message: '이 서버에서는 팀원 계정 격리를 사용할 수 없어 터미널을 열 수 없습니다 (Linux 전용).',
+              },
+            });
+            return;
+          }
+
+          // 계정 준비 → 실패 시 아래 catch에서 사유가 담긴 에러가 전달된다
+          runAsUser = (await linuxUserService.ensureLinuxUser(userId)) ?? undefined;
+          if (!runAsUser) {
+            socket.emit('terminal:error', {
+              error: { code: 'NO_LINUX_USER', message: '터미널 사용을 위해 관리자에게 Linux 계정 할당을 요청하세요' },
+            });
+            return;
+          }
+
+          // 이 프로젝트 디렉토리에 접근 권한 부여 (멱등)
+          linuxUserService.grantProjectAccess(runAsUser, resolved.cwd);
+        }
 
         await terminalService.startTerminal(socket, userId, resolved.cwd, safeCols, safeRows, runAsUser);
         socket.emit('terminal:ready', {

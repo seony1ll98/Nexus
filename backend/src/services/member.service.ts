@@ -1,5 +1,6 @@
 // 프로젝트 멤버 서비스 레이어
 import prisma from '../lib/prisma.js';
+import { linuxUserService } from './linux-user.service.js';
 import { createHttpError } from '../lib/errors.js';
 
 /** 프로젝트 멤버 목록 조회 */
@@ -18,6 +19,41 @@ async function findByProject(projectId: string) {
   }));
 }
 
+/**
+ * 프로젝트 디렉토리에 대한 팀원의 파일 접근 권한을 동기화한다.
+ *
+ * 멤버십 변경 자체를 막지 않도록 실패해도 예외를 던지지 않는다.
+ * 부여에 실패하더라도 터미널을 열 때 다시 시도하므로 자가 복구된다.
+ * (회수 실패는 권한이 남는 문제라 linux-user 서비스가 error 로그를 남긴다)
+ */
+async function syncProjectAcl(
+  projectId: string,
+  userId: string,
+  action: 'grant' | 'revoke',
+): Promise<void> {
+  if (!linuxUserService.isProvisioningSupported()) return;
+  try {
+    const [project, user] = await Promise.all([
+      prisma.project.findUnique({ where: { id: projectId }, select: { repoPath: true } }),
+      prisma.user.findUnique({ where: { id: userId }, select: { role: true, linuxUser: true } }),
+    ]);
+    // 관리자는 별도 계정을 쓰지 않으므로 ACL 대상이 아니다
+    if (!project || !user || user.role === 'admin' || !user.linuxUser) return;
+
+    if (action === 'grant') {
+      linuxUserService.grantProjectAccess(user.linuxUser, project.repoPath);
+    } else {
+      linuxUserService.revokeProjectAccess(user.linuxUser, project.repoPath);
+    }
+  } catch (err) {
+    console.warn(
+      `[member] 프로젝트 접근 권한 ${action === 'grant' ? '부여' : '회수'} 실패 `
+      + `(project=${projectId}, user=${userId}):`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 /** 멤버 추가 */
 async function add(projectId: string, userId: string, role: string) {
   const exists = await prisma.projectMember.findUnique({
@@ -27,6 +63,10 @@ async function add(projectId: string, userId: string, role: string) {
     throw createHttpError(409, '이미 프로젝트에 참여 중인 사용자입니다');
   }
   await prisma.projectMember.create({ data: { projectId, userId, role } });
+
+  // 프로젝트 폴더 접근 권한 부여
+  await syncProjectAcl(projectId, userId, 'grant');
+
   return findByProject(projectId);
 }
 
@@ -50,6 +90,10 @@ async function remove(projectId: string, userId: string) {
     throw createHttpError(404, '프로젝트 멤버를 찾을 수 없습니다');
   }
   await prisma.projectMember.delete({ where: { id: member.id } });
+
+  // 프로젝트에서 빠지면 파일 접근 권한도 회수한다.
+  // 회수하지 않으면 멤버에서 제외된 뒤에도 서버 파일을 계속 볼 수 있다.
+  await syncProjectAcl(projectId, userId, 'revoke');
 }
 
 /**
