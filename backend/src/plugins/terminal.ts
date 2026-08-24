@@ -143,7 +143,9 @@ export function registerTerminalNamespace(io: SocketIOServer): void {
         await terminalService.startTerminal(socket, userId, resolved.cwd, safeCols, safeRows, runAsUser);
         socket.emit('terminal:ready', {
           cwd: resolved.cwd,
-          user: runAsUser ?? 'ubuntu',
+          // 관리자는 백엔드 프로세스 유저로 실행된다 — 환경에 따라 이름이 다르므로
+          // 'ubuntu'로 단정하지 않고 실제 프로세스 유저를 보고한다
+          user: runAsUser ?? (process.env.USER || process.env.LOGNAME || 'unknown'),
           restricted: !isAdmin,
         });
       } catch (err) {

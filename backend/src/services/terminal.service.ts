@@ -55,10 +55,18 @@ async function tryLoadNodePty() {
   }
 }
 
-/** 실행할 명령어와 인자 결정 — runAsUser가 있으면 sudo -u */
+/**
+ * 실행할 명령어와 인자 결정 — runAsUser가 있으면 그 계정으로 셸을 띄운다.
+ *
+ * 절대 경로(/bin/bash)를 쓰는 이유: sudoers 화이트리스트가
+ * `appuser ALL=(%devusers) NOPASSWD: /bin/bash` 형태로 명령을 특정하므로,
+ * 경로가 다르면 권한 검사에 걸린다.
+ * `-i` 대신 `-l`(로그인 셸)을 쓰면 실행되는 명령이 그대로 /bin/bash가 되어
+ * sudoers 규칙과 정확히 맞는다.
+ */
 function resolveCommand(runAsUser?: string): { cmd: string; args: string[] } {
   if (runAsUser) {
-    return { cmd: 'sudo', args: ['-u', runAsUser, '-i', 'bash'] };
+    return { cmd: 'sudo', args: ['-u', runAsUser, '/bin/bash', '-l'] };
   }
   return { cmd: 'bash', args: [] };
 }
