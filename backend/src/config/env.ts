@@ -14,6 +14,10 @@ interface Env {
    * 기본값: 같은 호스트의 Nginx만 신뢰
    */
   TRUSTED_PROXIES: string[];
+  /** 전역 API 레이트 리밋 — 1분당 최대 요청 수 (기본 100) */
+  RATE_LIMIT_MAX: number;
+  /** 로그인 레이트 리밋 — IP당 1분 최대 시도 수 (기본 5) */
+  LOGIN_RATE_LIMIT_MAX: number;
   // DB 민감 데이터 암호화 키 — 64자 hex (32바이트). 미설정 시 claudeAccount 평문 저장
   ENCRYPTION_KEY?: string;
   // 알리고 SMS — optional (미설정 시 SMS 비활성화)
@@ -40,6 +44,9 @@ function loadEnv(): Env {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean),
+    // 기본값은 기존 하드코딩 값과 동일 — E2E/CI에서만 높여 쓴다
+    RATE_LIMIT_MAX: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
+    LOGIN_RATE_LIMIT_MAX: parseInt(process.env.LOGIN_RATE_LIMIT_MAX || '5', 10),
     ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
     ALIGO_API_KEY: process.env.ALIGO_API_KEY,
     ALIGO_USER_ID: process.env.ALIGO_USER_ID,

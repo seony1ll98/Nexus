@@ -2,6 +2,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import bcrypt from 'bcrypt';
 import prisma from '../../lib/prisma.js';
+import { env } from '../../config/env.js';
 
 // 요청 body 타입
 interface LoginBody {
@@ -20,8 +21,8 @@ const DUMMY_HASH = '$2b$10$dummyhashfortimingattack0000000000000000000000000000'
  * 구조: Map<ip, { count: number; resetAt: number }>
  */
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
-/** IP당 허용 최대 시도 횟수 */
-const MAX_ATTEMPTS = 5;
+/** IP당 허용 최대 시도 횟수 (LOGIN_RATE_LIMIT_MAX로 조정 가능) */
+const MAX_ATTEMPTS = env.LOGIN_RATE_LIMIT_MAX;
 /** 시도 횟수 초기화 주기 (밀리초) */
 const WINDOW_MS = 60_000;
 
