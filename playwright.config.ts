@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { ADMIN_AUTH_FILE } from './e2e/auth-file';
 
 export default defineConfig({
   testDir: './e2e',
@@ -12,6 +13,13 @@ export default defineConfig({
     video: 'retain-on-failure',
   },
   projects: [
-    { name: 'chromium', use: { browserName: 'chromium' } },
+    // 로그인 상태를 1회만 만들어 저장한다 (백엔드 로그인 레이트 리밋 회피)
+    { name: 'setup', testMatch: /auth\.setup\.ts/ },
+    {
+      name: 'chromium',
+      testIgnore: /auth\.setup\.ts/,
+      use: { browserName: 'chromium', storageState: ADMIN_AUTH_FILE },
+      dependencies: ['setup'],
+    },
   ],
 });

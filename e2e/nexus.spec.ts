@@ -30,17 +30,30 @@ async function login(page: Page, email = TEST_EMAIL, password = TEST_PASSWORD) {
 }
 
 /**
- * 세션 쿠키 문자열.
- * 쿠키는 백엔드 origin에 저장되므로 URL을 지정해서 읽어야 한다.
- * (인자 없이 호출하면 빈 배열이 나와 이후 API 호출이 전부 401이 된다)
+ * 인증된 API 호출.
+ *
+ * page.request는 브라우저 컨텍스트의 쿠키 저장소를 그대로 공유하므로
+ * Cookie 헤더를 직접 넣으면 안 된다 — context.cookies()가 httpOnly 세션 쿠키를
+ * 돌려주지 않기 때문에 빈 헤더가 실제 쿠키를 덮어써서 401이 된다.
  */
-async function getCookieStr(page: Page) {
-  return (await page.context().cookies(API)).map(c => `${c.name}=${c.value}`).join('; ');
+async function apiGet(page: Page, path: string) {
+  return page.request.get(`${API}${path}`);
 }
 
-async function apiGet(page: Page, path: string) {
-  const cookie = await getCookieStr(page);
-  return page.request.get(`${API}${path}`, { headers: { Cookie: cookie } });
+/**
+ * 메시지 입력란.
+ * placeholder는 Claude 연동 여부와 락 상태에 따라 문구가 바뀌므로
+ * 특정 문구 하나만 기다리면 환경에 따라 못 찾는다.
+ */
+function messageInput(page: Page) {
+  return page.getByPlaceholder(/메시지를 입력|Claude 계정을 먼저 연동|다른 팀원이 작업 중/);
+}
+
+/** 현재 로그인 사용자의 Claude 계정 연동 여부 */
+async function isClaudeConnected(page: Page): Promise<boolean> {
+  const res = await apiGet(page, '/api/auth/me');
+  if (res.status() !== 200) return false;
+  return Boolean((await res.json()).claudeConnected);
 }
 
 async function getSessionsList(page: Page, projectId: string) {
@@ -64,6 +77,9 @@ async function getProjectId(page: Page): Promise<string> {
 // 1. 로그인
 // ────────────────────────────────────────────
 test.describe('로그인', () => {
+  // 로그인 화면 자체를 검증하므로 저장된 인증 상태를 쓰지 않는다
+  test.use({ storageState: { cookies: [], origins: [] } });
+
   test('잘못된 비밀번호 → 에러 메시지', async ({ page }) => {
     await page.goto('/');
     await page.waitForURL(/\/login/);
@@ -85,7 +101,7 @@ test.describe('로그인', () => {
 // 2. 대시보드
 // ────────────────────────────────────────────
 test.describe('대시보드', () => {
-  test.beforeEach(async ({ page }) => { await login(page); });
+  test.beforeEach(async ({ page }) => { await page.goto('/'); });
 
   test('핵심 요소 표시', async ({ page }) => {
     await expect(page.getByText('팀 대시보드')).toBeVisible();
@@ -102,7 +118,7 @@ test.describe('대시보드', () => {
 // 3. 세션 페이지 — 메시지 표시
 // ────────────────────────────────────────────
 test.describe('세션 페이지', () => {
-  test.beforeEach(async ({ page }) => { await login(page); });
+  test.beforeEach(async ({ page }) => { await page.goto('/'); });
 
   test('세션 진입 → 메시지 + 입력란 표시', async ({ page }) => {
     const projectId = await getProjectId(page);
@@ -111,7 +127,7 @@ test.describe('세션 페이지', () => {
 
     await page.goto(`/projects/${projectId}/sessions/${sessions[0].id}`);
     // 메시지 입력란 존재
-    await expect(page.getByPlaceholder(/메시지를 입력/)).toBeVisible({ timeout: 10000 });
+    await expect(messageInput(page)).toBeVisible({ timeout: 10000 });
     // 락 상태 배지 존재
     await expect(page.getByText(/미사용|작업 중|내 작업/).first()).toBeVisible({ timeout: 5000 });
   });
@@ -132,12 +148,16 @@ test.describe('세션 페이지', () => {
   });
 
   test('전송 버튼 — 빈 입력 시 비활성, 입력 시 활성', async ({ page }) => {
+    // Claude 미연동 상태에서는 입력란 자체가 비활성이라 이 시나리오가 성립하지 않는다.
+    // 조용히 통과시키지 않고 skip으로 드러낸다.
+    test.skip(!(await isClaudeConnected(page)), 'Claude 계정 연동이 필요한 테스트');
+
     const projectId = await getProjectId(page);
     const sessions = await getSessionsList(page, projectId);
     expect(sessions.length, 'E2E 실행에는 세션이 최소 1개 필요하다').toBeGreaterThan(0);
 
     await page.goto(`/projects/${projectId}/sessions/${sessions[0].id}`);
-    const input = page.getByPlaceholder(/메시지를 입력/);
+    const input = messageInput(page);
     await expect(input).toBeVisible({ timeout: 10000 });
 
     // 빈 상태 → 전송 버튼 비활성
@@ -161,7 +181,7 @@ test.describe('세션 페이지', () => {
 // ────────────────────────────────────────────
 test.describe('세션 격리', () => {
   test('서로 다른 세션은 다른 대화 내용', async ({ page }) => {
-    await login(page);
+    await page.goto('/');
     const projectId = await getProjectId(page);
     const sessions = await getSessionsList(page, projectId);
     // 세션이 1개뿐이면 이 테스트는 성립하지 않는다 — 조용한 통과 대신 skip으로 드러낸다
@@ -188,7 +208,7 @@ test.describe('세션 격리', () => {
 // 5. 코드 에디터 (Monaco + 파일 브라우저)
 // ────────────────────────────────────────────
 test.describe('코드 에디터', () => {
-  test.beforeEach(async ({ page }) => { await login(page); });
+  test.beforeEach(async ({ page }) => { await page.goto('/'); });
 
   test('에디터 토글 → 파일 탐색기 표시', async ({ page }) => {
     const projectId = await getProjectId(page);
@@ -204,8 +224,10 @@ test.describe('코드 에디터', () => {
     await editorBtn.click();
     await page.waitForTimeout(1000);
 
-    // 파일 탐색기 헤더 확인
-    await expect(page.getByText('탐색기')).toBeVisible({ timeout: 5000 });
+    // 파일 탐색기 헤더 확인.
+    // 패널은 translateX로 슬라이드하며 닫혀도 DOM에 남으므로,
+    // toBeVisible이 아니라 뷰포트 안에 들어왔는지로 판정해야 열림을 실제로 검증한다.
+    await expect(page.getByText('탐색기', { exact: true })).toBeInViewport({ timeout: 5000 });
     // 빈 상태 메시지 or 파일 목록 확인
     await expect(page.getByText(/좌측 탐색기에서 파일을 선택하세요|로딩 중/)).toBeVisible({ timeout: 5000 });
   });
@@ -242,14 +264,14 @@ test.describe('코드 에디터', () => {
     const toggleBtn = page.getByRole('button', { name: '코드 에디터 토글' });
     await toggleBtn.click();
     await page.waitForTimeout(500);
-    // 열림 상태 확인
-    await expect(page.getByText('탐색기')).toBeVisible();
+    // 열림 상태 확인 (뷰포트 진입 여부로 판정 — 위 주석 참고)
+    await expect(page.getByText('탐색기', { exact: true })).toBeInViewport();
 
     // 닫기
     await page.getByRole('button', { name: '패널 닫기' }).click();
     await page.waitForTimeout(500);
-    // 숨겨짐
-    await expect(page.getByText('탐색기')).not.toBeVisible();
+    // 숨겨짐 — 화면 밖으로 밀려났는지 확인
+    await expect(page.getByText('탐색기', { exact: true })).not.toBeInViewport();
   });
 });
 
@@ -257,7 +279,7 @@ test.describe('코드 에디터', () => {
 // 6. 터미널 멀티탭
 // ────────────────────────────────────────────
 test.describe('터미널', () => {
-  test.beforeEach(async ({ page }) => { await login(page); });
+  test.beforeEach(async ({ page }) => { await page.goto('/'); });
 
   test('터미널 토글 → 탭 생성', async ({ page }) => {
     const projectId = await getProjectId(page);
@@ -299,13 +321,9 @@ test.describe('터미널', () => {
 // ────────────────────────────────────────────
 test.describe('파일 브라우저 API', () => {
   test('GET /api/tree/browse → 파일 목록', async ({ page }) => {
-    await login(page);
+    await page.goto('/');
     const projectId = await getProjectId(page);
-    const cookie = await getCookieStr(page);
-
-    const res = await page.request.get(`${API}/api/tree/browse?projectId=${projectId}`, {
-      headers: { Cookie: cookie },
-    });
+    const res = await apiGet(page, `/api/tree/browse?projectId=${projectId}`);
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body.items).toBeDefined();
@@ -317,40 +335,34 @@ test.describe('파일 브라우저 API', () => {
   });
 
   test('경로 트래버설 차단 → 403', async ({ page }) => {
-    await login(page);
+    await page.goto('/');
     const projectId = await getProjectId(page);
-    const cookie = await getCookieStr(page);
-
-    const res = await page.request.get(`${API}/api/tree/browse?projectId=${projectId}&path=../../etc`, {
-      headers: { Cookie: cookie },
-    });
+    const res = await apiGet(page, `/api/tree/browse?projectId=${projectId}&path=../../etc`);
     expect(res.status()).toBe(403);
   });
 
   test('파일 읽기 → 200', async ({ page }) => {
-    await login(page);
+    await page.goto('/');
     const projectId = await getProjectId(page);
-    const cookie = await getCookieStr(page);
 
-    const res = await page.request.get(
-      `${API}/api/tree/file?projectId=${projectId}&path=${encodeURIComponent('CLAUDE.md')}`,
-      { headers: { Cookie: cookie } },
-    );
+    // 특정 파일명(CLAUDE.md 등)을 가정하지 않는다 — 탐색기 목록에서 실제 파일을 고른다
+    const list = await apiGet(page, `/api/tree/browse?projectId=${projectId}`);
+    expect(list.status()).toBe(200);
+    const items = (await list.json()).items as Array<{ name: string; path: string; type: string }>;
+    const file = items.find((i) => i.type === 'file');
+    test.skip(!file, '프로젝트 루트에 읽을 파일이 없어 건너뜀');
+
+    const res = await apiGet(page, `/api/tree/file?projectId=${projectId}&path=${encodeURIComponent(file!.path)}`);
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body.content).toBeDefined();
-    expect(body.language).toBe('markdown');
+    expect(typeof body.language).toBe('string');
   });
 
   test('민감 파일 읽기 차단 → 403', async ({ page }) => {
-    await login(page);
+    await page.goto('/');
     const projectId = await getProjectId(page);
-    const cookie = await getCookieStr(page);
-
-    const res = await page.request.get(
-      `${API}/api/tree/file?projectId=${projectId}&path=${encodeURIComponent('.env')}`,
-      { headers: { Cookie: cookie } },
-    );
+    const res = await apiGet(page, `/api/tree/file?projectId=${projectId}&path=${encodeURIComponent('.env')}`);
     expect(res.status()).toBe(403);
   });
 });
@@ -360,13 +372,13 @@ test.describe('파일 브라우저 API', () => {
 // ────────────────────────────────────────────
 test.describe('존재하지 않는 페이지', () => {
   test('잘못된 세션 ID → 에러 또는 빈 상태', async ({ page }) => {
-    await login(page);
+    await page.goto('/');
     const projectId = await getProjectId(page);
     const fakeSessionId = '00000000-0000-0000-0000-000000000000';
     await page.goto(`/projects/${projectId}/sessions/${fakeSessionId}`);
     await page.waitForTimeout(2000);
     // 메시지 입력란이 없거나, 에러 표시가 있어야 함
-    const hasInput = await page.getByPlaceholder(/메시지를 입력/).isVisible().catch(() => false);
+    const hasInput = await messageInput(page).isVisible().catch(() => false);
     const hasError = await page.getByText(/찾을 수 없|오류|404/).isVisible().catch(() => false);
     // 둘 중 하나는 참이어야 함 (빈 세션이거나 에러)
     expect(hasInput || hasError).toBe(true);

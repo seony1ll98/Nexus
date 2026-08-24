@@ -54,3 +54,6 @@ backend/src/generated/
 /*.png
 /*.jpg
 /*.jpeg
+
+# Playwright 인증 상태 (로그인 세션 쿠키 — 커밋 금지)
+/playwright/.auth/

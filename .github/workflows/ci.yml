@@ -62,7 +62,7 @@ jobs:
 
   # ── E2E — 실제 DB + 서버를 띄우고 API를 호출한다 ───────────
   e2e:
-    name: E2E (백엔드 API)
+    name: E2E (백엔드 API + 브라우저)
     runs-on: ubuntu-latest
     needs: static
 
@@ -89,6 +89,11 @@ jobs:
       ADMIN_SEED_PASSWORD: CiAdmin!2026
       TEST_EMAIL: admin@nexus.com
       TEST_PASSWORD: CiAdmin!2026
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      # E2E는 한 IP에서 수백 건을 호출하므로 운영 기본값(100/분, 로그인 5/분)으로는 막힌다.
+      # 운영 동작을 바꾸지 않도록 기본값은 그대로 두고 여기서만 올린다.
+      RATE_LIMIT_MAX: '2000'
+      LOGIN_RATE_LIMIT_MAX: '100'
 
     steps:
       - uses: actions/checkout@v4
@@ -145,14 +150,56 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"name":"ci-project","description":"CI E2E 대상"}')
           PROJECT_ID=$(printf '%s' "$PROJECT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).id))")
-          curl -sf -b "$RUNNER_TEMP/cookies.txt" -X POST http://localhost:8080/api/sessions \
-            -H 'Content-Type: application/json' \
-            -d "{\"projectId\":\"$PROJECT_ID\",\"title\":\"CI 기본 세션\"}" > /dev/null
+          # 세션 격리 테스트에 2개 이상 필요하다
+          for n in 1 2; do
+            curl -sf -b "$RUNNER_TEMP/cookies.txt" -X POST http://localhost:8080/api/sessions \
+              -H 'Content-Type: application/json' \
+              -d "{\"projectId\":\"$PROJECT_ID\",\"title\":\"CI 기본 세션 $n\"}" > /dev/null
+          done
 
       - name: 백엔드 E2E 테스트
         working-directory: backend
         run: npm test
 
-      - name: 실패 시 백엔드 로그 출력
+      # ── 브라우저 E2E ──────────────────────────────────────
+      # Playwright 스펙은 한때 18건 중 16건이 조용히 통과하고 있었다.
+      # CI에서 실제로 돌려야 같은 상태로 되돌아가지 않는다.
+      - name: 프론트엔드 빌드
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: 프론트엔드 기동
+        working-directory: frontend
+        run: |
+          npx next start -p 3000 > "$RUNNER_TEMP/frontend.log" 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://localhost:3000 && break
+            sleep 1
+          done
+          curl -sf -o /dev/null http://localhost:3000
+
+      - name: Playwright 브라우저 설치
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: 브라우저 E2E 테스트
+        run: npx playwright test
+
+      - name: 실패 시 로그 출력
         if: failure()
-        run: cat "$RUNNER_TEMP/backend.log"
+        run: |
+          echo '=== backend ==='; cat "$RUNNER_TEMP/backend.log" || true
+          echo '=== frontend ==='; cat "$RUNNER_TEMP/frontend.log" || true
+
+      - name: 실패 시 Playwright 리포트 업로드
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
