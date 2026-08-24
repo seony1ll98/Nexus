@@ -19,6 +19,10 @@ const OUTSIDER_EMAIL = process.env.TEST_OUTSIDER_EMAIL ?? 'e2e-outsider@nexus.lo
 const OUTSIDER_PASSWORD = process.env.TEST_OUTSIDER_PASSWORD ?? 'E2eOutsider!2026';
 const OUTSIDER_NAME = 'E2E 비멤버';
 
+/** 락 경합 테스트용 두 번째 멤버 계정 */
+const RIVAL_EMAIL = process.env.TEST_RIVAL_EMAIL ?? 'e2e-rival@nexus.local';
+const RIVAL_PASSWORD = process.env.TEST_RIVAL_PASSWORD ?? 'E2eRival!2026';
+
 /** 쿠키 저장소 */
 let sessionCookie = '';
 let outsiderCookie = '';
@@ -275,6 +279,91 @@ describe('세션 락', () => {
     expect(unlockRes.status).toBe(200);
     const unlockBody = await unlockRes.json();
     expect(unlockBody.lockedBy).toBeNull();
+  });
+
+  /**
+   * 동시 획득 경합 (F8 회귀 방지).
+   *
+   * 예전에는 "읽고 → 쓰기" 방식이라 동시 요청 둘이 모두 미잠금 상태를 읽고
+   * 둘 다 성공했다. 조건부 UPDATE로 바꾼 뒤에는 정확히 하나만 200,
+   * 나머지는 409를 받아야 한다.
+   */
+  it('서로 다른 사용자의 동시 락 요청 — 정확히 한 명만 획득', async () => {
+    if (!testSessionId) throw new Error('테스트 세션이 없습니다');
+    if (!projectId) throw new Error('프로젝트가 없습니다');
+
+    // 경합 상대 계정 준비 — 같은 프로젝트의 멤버여야 락 API에 도달한다
+    await authFetch('/api/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'E2E 락 경합',
+        email: RIVAL_EMAIL,
+        password: RIVAL_PASSWORD,
+        role: 'member',
+      }),
+    });
+
+    const rivalLogin = await fetch(`${API}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: RIVAL_EMAIL, password: RIVAL_PASSWORD }),
+    });
+    expect(rivalLogin.status, '경합 계정 로그인').toBe(200);
+    const rivalId = (await rivalLogin.json()).user.id as string;
+    const rivalCookies = rivalLogin.headers.getSetCookie?.() ?? [];
+    const rivalCookie = (rivalCookies.find((c: string) => c.includes('connect.sid')) ?? '').split(';')[0];
+    expect(rivalCookie).toBeTruthy();
+
+    // 프로젝트 멤버로 추가 (이미 멤버면 409 — 무시)
+    await authFetch(`/api/projects/${projectId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ userId: rivalId, role: 'member' }),
+    });
+
+    // 잠기지 않은 상태에서 시작
+    await authFetch(`/api/sessions/${testSessionId}/unlock`, { method: 'POST' });
+
+    const lockAs = (cookie: string) =>
+      fetch(`${API}/api/sessions/${testSessionId}/lock`, {
+        method: 'POST',
+        headers: { Cookie: cookie },
+      });
+
+    // 서로 다른 사용자가 동시에 락을 요청한다.
+    // 경합 구간이 좁으므로 여러 라운드를 반복해 확률을 높인다.
+    for (let round = 0; round < 20; round++) {
+      await authFetch(`/api/sessions/${testSessionId}/unlock`, { method: 'POST' });
+      await fetch(`${API}/api/sessions/${testSessionId}/unlock`, {
+        method: 'POST', headers: { Cookie: rivalCookie },
+      }).catch(() => null);
+
+      const [a1, r1, a2, r2] = await Promise.all([
+        lockAs(sessionCookie), lockAs(rivalCookie),
+        lockAs(sessionCookie), lockAs(rivalCookie),
+      ]);
+
+      // 같은 사용자의 반복 요청은 200이 여러 번 나올 수 있다(이미 본인 락).
+      // 검증할 불변식은 "서로 다른 두 사용자가 동시에 획득하지 못한다"이다.
+      const adminWon = [a1.status, a2.status].includes(200);
+      const rivalWon = [r1.status, r2.status].includes(200);
+      expect(
+        adminWon && rivalWon,
+        `라운드 ${round}: 두 사용자가 동시에 락을 획득했다 `
+        + `(admin=${a1.status},${a2.status} / rival=${r1.status},${r2.status})`,
+      ).toBe(false);
+    }
+
+    // 최종 소유자는 200을 받은 쪽 하나뿐
+    const detail = await authFetch(`/api/sessions/${testSessionId}`);
+    const body = await detail.json();
+    expect([currentUserId, rivalId]).toContain(body.lockedBy);
+
+    // 정리 — 소유자가 누구든 해제되도록 양쪽 모두 시도
+    await authFetch(`/api/sessions/${testSessionId}/unlock`, { method: 'POST' });
+    await fetch(`${API}/api/sessions/${testSessionId}/unlock`, {
+      method: 'POST',
+      headers: { Cookie: rivalCookie },
+    }).catch(() => null);
   });
 });
 

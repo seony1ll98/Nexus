@@ -130,8 +130,13 @@ class TeamQueryService {
 
     proc.stdout.on('data', onData);
 
+    // stderr는 진단 정보다 — 종료 신호로 쓰면 경고 한 줄에 스트림이 끊긴다
     proc.stderr.on('data', (chunk: Buffer) => {
-      emitter.emit('error', chunk.toString());
+      const text = chunk.toString().trim();
+      if (text) console.warn('[TeamQueryService] CLI stderr:', text);
+    });
+    proc.on('error', (e) => {
+      emitter.emit('error', `CLI 프로세스를 실행하지 못했습니다: ${e.message}`);
     });
 
     proc.on('close', (code) => {

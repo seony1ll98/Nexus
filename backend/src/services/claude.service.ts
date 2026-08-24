@@ -120,8 +120,12 @@ class ClaudeService {
         this.processes.set(sessionId, retry.process);
 
         retry.process.stdout.on('data', onData);
+        // stderr는 진단 정보일 뿐 종료 신호가 아니다 — 아래 close에서만 종료를 판정한다
         retry.process.stderr.on('data', (c: Buffer) => {
-          emitter.emit('error', c.toString());
+          emitter.emit('stderr', c.toString());
+        });
+        retry.process.on('error', (e) => {
+          emitter.emit('fatal', `CLI 프로세스를 실행하지 못했습니다: ${e.message}`);
         });
         retry.process.on('close', (code) => {
           this.processes.delete(sessionId);
@@ -135,8 +139,21 @@ class ClaudeService {
     };
 
     proc.process.stdout.on('data', originalOnData);
+
+    // ────────────────────────────────────────────
+    // stderr는 "진단 정보"이지 "종료 신호"가 아니다.
+    //
+    // 이전에는 stderr 한 줄만 나와도 error를 emit했고, 소비자가 그것을 종료로
+    // 처리해 스트림이 끊기고 그때까지 모은 응답이 통째로 유실됐다.
+    // Node 경고나 CLI의 재시도 로그 한 줄로도 트리거됐다.
+    // 이제 stderr는 stderr 이벤트로만 알리고, 종료 판정은 close의 exit code로 한다.
+    // 스폰 자체가 실패한 경우만 fatal로 구분한다.
+    // ────────────────────────────────────────────
     proc.process.stderr.on('data', (chunk: Buffer) => {
-      emitter.emit('error', chunk.toString());
+      emitter.emit('stderr', chunk.toString());
+    });
+    proc.process.on('error', (e) => {
+      emitter.emit('fatal', `CLI 프로세스를 실행하지 못했습니다: ${e.message}`);
     });
     proc.process.on('close', (code) => {
       if (retried) return; // 재시도된 경우 이 핸들러 무시
