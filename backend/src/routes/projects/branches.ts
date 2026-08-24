@@ -4,7 +4,8 @@ import { requireAuth } from '../../plugins/auth.js';
 import prisma from '../../lib/prisma.js';
 import { createHttpError } from '../../lib/errors.js';
 import { memberService } from '../../services/member.service.js';
-import { simpleGit, type BranchSummaryBranch } from 'simple-git';
+import { type BranchSummaryBranch } from 'simple-git';
+import { git as openRepo, resolveDefaultBranch } from '../../lib/git.js';
 
 /** 응답 브랜치 항목 타입 */
 interface BranchItem {
@@ -39,7 +40,10 @@ const branchesRoute: FastifyPluginAsync = async (fastify) => {
     if (!project) throw createHttpError(404, '프로젝트를 찾을 수 없습니다');
     await memberService.assertProjectMember(projectId, request.userId);
 
-    const git = simpleGit(project.repoPath);
+    const git = openRepo(project.repoPath);
+    // 기본 브랜치를 실제로 감지한다 — 'main'을 하드코딩하면 master로 만들어진
+    // 저장소에서 rev-list가 조용히 실패해 ahead/behind가 항상 0으로 표시된다.
+    const baseBranch = await resolveDefaultBranch(project.repoPath);
 
     // 로컬 브랜치 목록 조회
     const branchSummary = await git.branchLocal();
@@ -55,20 +59,20 @@ const branchesRoute: FastifyPluginAsync = async (fastify) => {
         // 작성자 조회 실패 시 생략
       }
 
-      // main 브랜치와의 ahead/behind 계산
+      // 기본 브랜치와의 ahead/behind 계산
       let aheadCount = 0;
       let behindCount = 0;
-      if (name !== 'main') {
+      if (name !== baseBranch) {
         try {
           const raw = await git.raw([
-            'rev-list', '--left-right', '--count', `main...${name}`,
+            'rev-list', '--left-right', '--count', `${baseBranch}...${name}`,
           ]);
           // 출력 형식: "behind\tahead\n"
           const parts = raw.trim().split(/\s+/);
           behindCount = parseInt(parts[0] ?? '0', 10) || 0;
           aheadCount = parseInt(parts[1] ?? '0', 10) || 0;
         } catch {
-          // main 브랜치가 없거나 비교 실패 시 0 유지
+          // 기본 브랜치가 없거나 비교 실패 시 0 유지
         }
       }
 
@@ -89,10 +93,10 @@ const branchesRoute: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    // main/current 브랜치를 앞으로 정렬
+    // 기본/현재 브랜치를 앞으로 정렬
     branches.sort((a, b) => {
-      if (a.name === 'main') return -1;
-      if (b.name === 'main') return 1;
+      if (a.name === baseBranch) return -1;
+      if (b.name === baseBranch) return 1;
       if (a.current) return -1;
       if (b.current) return 1;
       return 0;

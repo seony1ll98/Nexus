@@ -46,7 +46,7 @@ const commitRevertRoute: FastifyPluginAsync = async (fastify) => {
     });
 
     // revert 실행 (충돌 시 서비스에서 409 throw)
-    await revertCommit(projectId, project.repoPath, commit.hash);
+    await revertCommit(projectId, project.repoPath, commit.hash, request.userId);
 
     return reply.code(200).send({
       message: `커밋 ${commit.hash.slice(0, 7)} revert 완료`,

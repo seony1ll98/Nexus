@@ -65,7 +65,8 @@ const internalRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     // main에 merge (세션 상태는 변경하지 않음)
-    const result = await mergeService.mergeSessionToMain(session, session.project);
+    // CLI가 대신 호출하므로 요청 사용자가 없다 — 세션 생성자를 작성자로 쓴다
+    const result = await mergeService.mergeSessionToMain(session, session.project, session.createdBy);
 
     // merge 성공 시 커밋 동기화
     if (result.status === 'merged') {

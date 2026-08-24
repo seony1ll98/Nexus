@@ -30,7 +30,7 @@ const mergeRoute: FastifyPluginAsync = async (fastify) => {
     if (!session.branchName) throw createHttpError(400, '브랜치 정보가 없는 세션입니다');
 
     // main에 merge (세션 상태는 변경하지 않음 — worktree 유지)
-    const result = await mergeService.mergeSessionToMain(session, session.project);
+    const result = await mergeService.mergeSessionToMain(session, session.project, request.userId);
 
     // merge 성공 시 DB 상태 업데이트 + 커밋 동기화
     if (result.status === 'merged') {

@@ -1,5 +1,5 @@
 // git worktree 생성/삭제 서비스
-import { simpleGit } from 'simple-git';
+import { git as openRepo } from '../lib/git.js';
 import path from 'path';
 import fs from 'fs/promises';
 import { createHttpError } from '../lib/errors.js';
@@ -72,7 +72,7 @@ export async function createWorktree(
   // 부모 디렉토리 생성
   await fs.mkdir(path.dirname(worktreePath), { recursive: true });
 
-  const git = simpleGit(repoPath);
+  const git = openRepo(repoPath);
 
   try {
     // git worktree add -b {branchName} {worktreePath}
@@ -101,7 +101,7 @@ export async function removeWorktree(repoPath: string, worktreePath: string): Pr
     return;
   }
 
-  const git = simpleGit(repoPath);
+  const git = openRepo(repoPath);
 
   try {
     // --force: 작업 중인 변경사항이 있어도 강제 제거

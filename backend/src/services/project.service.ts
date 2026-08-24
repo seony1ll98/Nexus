@@ -1,6 +1,6 @@
 // 프로젝트 서비스 레이어
 import prisma from '../lib/prisma.js';
-import { simpleGit } from 'simple-git';
+import { git, authorForUser, DEFAULT_BRANCH } from '../lib/git.js';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -54,9 +54,14 @@ async function create(dto: { name: string; description?: string; createdBy?: str
   await fs.mkdir(repoPath, { recursive: true });
 
   // git init + 초기 커밋
-  const git = simpleGit(repoPath);
-  await git.init();
-  await git.raw(['commit', '--allow-empty', '-m', `프로젝트 "${dto.name}" 초기화`]);
+  // -b로 기본 브랜치를 고정한다 — 지정하지 않으면 git 설정에 따라 master가 만들어져
+  // main을 가정하는 화면(브랜치 ahead/behind 등)과 어긋난다.
+  // 커밋 신원은 lib/git.ts가 주입한다 — 컨테이너에는 전역 gitconfig가 없어
+  // 그대로 두면 "unable to auto-detect email address"로 커밋이 거부된다.
+  const author = await authorForUser(dto.createdBy);
+  const repo = git(repoPath, author);
+  await repo.init(['-b', DEFAULT_BRANCH]);
+  await repo.raw(['commit', '--allow-empty', '-m', `프로젝트 "${dto.name}" 초기화`]);
 
   // DB 저장 + 생성자를 프로젝트 멤버로 자동 등록
   return prisma.project.create({

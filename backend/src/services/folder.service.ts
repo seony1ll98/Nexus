@@ -1,7 +1,7 @@
 // 폴더 서비스 레이어
 import prisma from '../lib/prisma.js';
 import { createHttpError } from '../lib/errors.js';
-import { simpleGit } from 'simple-git';
+import { git as openRepo, authorForUser } from '../lib/git.js';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -30,7 +30,12 @@ async function findById(id: string) {
 }
 
 /** 폴더 생성 — 실제 git 저장소에 디렉토리 생성 + 커밋 포함 */
-async function create(projectId: string, dto: { name: string; description?: string }) {
+async function create(
+  projectId: string,
+  dto: { name: string; description?: string },
+  /** 폴더를 만든 사용자 — 커밋 작성자로 기록된다 */
+  userId?: string | null,
+) {
   // 중복 검사
   const exists = await prisma.folder.findUnique({
     where: { projectId_name: { projectId, name: dto.name } },
@@ -60,8 +65,8 @@ async function create(projectId: string, dto: { name: string; description?: stri
   await fs.mkdir(dirPath, { recursive: true });
   await fs.writeFile(path.join(dirPath, '.gitkeep'), '', 'utf8');
 
-  // git add + commit
-  const git = simpleGit(project.repoPath);
+  // git add + commit (커밋 신원은 lib/git.ts가 주입)
+  const git = openRepo(project.repoPath, await authorForUser(userId));
   await git.add(path.join(dirName, '.gitkeep'));
   await git.commit(`폴더 "${dto.name}" 생성`);
 

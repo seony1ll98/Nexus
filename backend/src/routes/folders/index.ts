@@ -60,7 +60,7 @@ const folderRoutes: FastifyPluginAsync = async (fastify) => {
     // 프로젝트 멤버십 검증 — 비멤버는 폴더 생성 불가
     await memberService.assertProjectMember(request.params.projectId, request.userId);
     // 409 Conflict 포함 에러는 전역 핸들러에서 처리
-    const folder = await folderService.create(request.params.projectId, request.body);
+    const folder = await folderService.create(request.params.projectId, request.body, request.userId);
     return reply.code(201).send(folder);
   });
 

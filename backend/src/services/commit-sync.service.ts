@@ -1,6 +1,6 @@
 // Git 커밋 동기화 서비스 — worktree에서 새 커밋을 읽어 DB에 동기화
 // diff/revert 기능은 commit-diff.service.ts로 분리됨
-import { simpleGit } from 'simple-git';
+import { git as openRepo } from '../lib/git.js';
 import prisma from '../lib/prisma.js';
 import { socketService } from './socket.service.js';
 
@@ -16,7 +16,7 @@ async function extractCommitStat(
   repoPath: string,
   hash: string,
 ): Promise<CommitStatResult> {
-  const git = simpleGit(repoPath);
+  const git = openRepo(repoPath);
   try {
     // 변경 파일 목록
     const filesRaw = await git.raw([
@@ -54,7 +54,7 @@ class CommitSyncService {
     sessionId: string | null,
     worktreePath: string,
   ): Promise<void> {
-    const git = simpleGit(worktreePath);
+    const git = openRepo(worktreePath);
 
     // DB에서 마지막 동기화된 커밋 조회
     const lastCommit = await prisma.commit.findFirst({

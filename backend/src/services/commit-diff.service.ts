@@ -1,5 +1,5 @@
 // 커밋 diff 조회 및 revert 서비스 — commit-sync.service.ts에서 분리
-import { simpleGit } from 'simple-git';
+import { git as openRepo, authorForUser } from '../lib/git.js';
 import { createHttpError } from '../lib/errors.js';
 import { commitSyncService } from './commit-sync.service.js';
 
@@ -24,7 +24,7 @@ export async function getCommitDiff(
   repoPath: string,
   hash: string,
 ): Promise<{ filename: string; diff: string }[]> {
-  const git = simpleGit(repoPath);
+  const git = openRepo(repoPath);
   const raw = await git.diff([`${hash}^`, hash]);
   return parseDiffByFile(raw);
 }
@@ -39,8 +39,11 @@ export async function revertCommit(
   projectId: string,
   repoPath: string,
   hash: string,
+  /** revert를 실행한 사용자 — revert 커밋의 작성자로 기록된다 */
+  userId?: string | null,
 ): Promise<void> {
-  const git = simpleGit(repoPath);
+  // revert는 새 커밋을 만든다 — 커밋 신원이 없으면 컨테이너에서 실패한다
+  const git = openRepo(repoPath, await authorForUser(userId));
   try {
     // --no-edit: 에디터 없이 기본 revert 커밋 메시지 사용
     await git.raw(['revert', '--no-edit', hash]);

@@ -1,5 +1,5 @@
 // Merge 서비스 — worktree 브랜치를 main에 merge
-import { simpleGit } from 'simple-git';
+import { git as openRepo, authorForUser, resolveDefaultBranch } from '../lib/git.js';
 import { mergeQueueService } from './merge-queue.service.js';
 
 /** Merge 결과 */
@@ -28,18 +28,25 @@ class MergeService {
    * @param session 세션 (branchName 필요)
    * @param project 프로젝트 (id, repoPath 필요)
    */
-  async mergeSessionToMain(session: SessionLike, project: ProjectLike): Promise<MergeResult> {
+  async mergeSessionToMain(
+    session: SessionLike,
+    project: ProjectLike,
+    /** merge를 수행한 사용자 — 자동 커밋/머지 커밋의 작성자로 기록된다 */
+    userId?: string | null,
+  ): Promise<MergeResult> {
     if (!session.branchName) {
       // branchName이 없는 세션(프로젝트 직속)은 merge 불필요
       return { status: 'merged' };
     }
 
     return mergeQueueService.executeMerge(project.id, async () => {
-      const git = simpleGit(project.repoPath);
+      // 커밋 신원은 lib/git.ts가 주입한다 — 없으면 컨테이너에서 커밋이 거부된다
+      const author = await authorForUser(userId);
+      const git = openRepo(project.repoPath, author);
 
       // worktree에 uncommitted 변경이 있으면 자동 커밋
       if (session.worktreePath) {
-        const wtGit = simpleGit(session.worktreePath);
+        const wtGit = openRepo(session.worktreePath, author);
         const status = await wtGit.status();
         if (status.files.length > 0) {
           await wtGit.add('.');
@@ -47,9 +54,8 @@ class MergeService {
         }
       }
 
-      // 기본 브랜치 감지 (main 또는 master)
-      const branches = await git.branchLocal();
-      const defaultBranch = branches.all.includes('main') ? 'main' : 'master';
+      // 기본 브랜치 감지 — 감지 로직은 lib/git.ts에 단일화되어 있다
+      const defaultBranch = await resolveDefaultBranch(project.repoPath);
 
       // 기본 브랜치로 체크아웃
       await git.checkout(defaultBranch);
