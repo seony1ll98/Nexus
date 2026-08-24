@@ -10,37 +10,54 @@ if (!TEST_EMAIL || !TEST_PASSWORD) {
   throw new Error('TEST_EMAIL, TEST_PASSWORD 환경변수가 필요합니다');
 }
 
+/**
+ * 백엔드 API 주소.
+ * 프론트(3000)와 백엔드(8080)는 서로 다른 origin이므로 반드시 절대 경로로 호출해야 한다.
+ * 상대 경로로 호출하면 baseURL(3000)로 나가 404가 되고, 테스트가 조용히 통과해버린다.
+ */
+const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080';
+
 // ────────────────────────────────────────────
 // 헬퍼
 // ────────────────────────────────────────────
-async function login(page: Page) {
+async function login(page: Page, email = TEST_EMAIL, password = TEST_PASSWORD) {
   await page.goto('/');
   await page.waitForURL(/\/login/);
-  await page.getByRole('textbox', { name: '이메일' }).fill(TEST_EMAIL);
-  await page.getByRole('textbox', { name: '비밀번호' }).fill(TEST_PASSWORD);
+  await page.getByRole('textbox', { name: '이메일' }).fill(email);
+  await page.getByRole('textbox', { name: '비밀번호' }).fill(password);
   await page.getByRole('button', { name: '로그인' }).click();
   await page.waitForURL(/\/\?projectId=|\/$/);
 }
 
+/**
+ * 세션 쿠키 문자열.
+ * 쿠키는 백엔드 origin에 저장되므로 URL을 지정해서 읽어야 한다.
+ * (인자 없이 호출하면 빈 배열이 나와 이후 API 호출이 전부 401이 된다)
+ */
 async function getCookieStr(page: Page) {
-  return (await page.context().cookies()).map(c => `${c.name}=${c.value}`).join('; ');
+  return (await page.context().cookies(API)).map(c => `${c.name}=${c.value}`).join('; ');
+}
+
+async function apiGet(page: Page, path: string) {
+  const cookie = await getCookieStr(page);
+  return page.request.get(`${API}${path}`, { headers: { Cookie: cookie } });
 }
 
 async function getSessionsList(page: Page, projectId: string) {
-  const cookie = await getCookieStr(page);
-  const res = await page.request.get(`/api/sessions?projectId=${projectId}`, { headers: { Cookie: cookie } });
-  if (!res.ok()) return [];
+  const res = await apiGet(page, `/api/sessions?projectId=${projectId}`);
+  expect(res.status(), '세션 목록 조회 실패').toBe(200);
   const body = await res.json();
   return Array.isArray(body) ? body : (body.data ?? []);
 }
 
 async function getProjectId(page: Page): Promise<string> {
-  const cookie = await getCookieStr(page);
-  const res = await page.request.get('/api/projects', { headers: { Cookie: cookie } });
-  if (!res.ok()) return '';
+  const res = await apiGet(page, '/api/projects');
+  expect(res.status(), '프로젝트 목록 조회 실패').toBe(200);
   const body = await res.json();
   const projects = body.data ?? body;
-  return projects[0]?.id ?? '';
+  // 테스트 데이터가 없으면 조용히 통과시키지 않고 실패시킨다
+  expect(projects.length, 'E2E 실행에는 프로젝트가 최소 1개 필요하다').toBeGreaterThan(0);
+  return projects[0].id;
 }
 
 // ────────────────────────────────────────────
@@ -89,9 +106,8 @@ test.describe('세션 페이지', () => {
 
   test('세션 진입 → 메시지 + 입력란 표시', async ({ page }) => {
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const sessions = await getSessionsList(page, projectId);
-    if (sessions.length === 0) return;
+    expect(sessions.length, 'E2E 실행에는 세션이 최소 1개 필요하다').toBeGreaterThan(0);
 
     await page.goto(`/projects/${projectId}/sessions/${sessions[0].id}`);
     // 메시지 입력란 존재
@@ -102,9 +118,8 @@ test.describe('세션 페이지', () => {
 
   test('메시지에 시스템 태그 미포함', async ({ page }) => {
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const sessions = await getSessionsList(page, projectId);
-    if (sessions.length === 0) return;
+    expect(sessions.length, 'E2E 실행에는 세션이 최소 1개 필요하다').toBeGreaterThan(0);
 
     await page.goto(`/projects/${projectId}/sessions/${sessions[0].id}`);
     await page.waitForTimeout(2000);
@@ -118,9 +133,8 @@ test.describe('세션 페이지', () => {
 
   test('전송 버튼 — 빈 입력 시 비활성, 입력 시 활성', async ({ page }) => {
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const sessions = await getSessionsList(page, projectId);
-    if (sessions.length === 0) return;
+    expect(sessions.length, 'E2E 실행에는 세션이 최소 1개 필요하다').toBeGreaterThan(0);
 
     await page.goto(`/projects/${projectId}/sessions/${sessions[0].id}`);
     const input = page.getByPlaceholder(/메시지를 입력/);
@@ -149,9 +163,9 @@ test.describe('세션 격리', () => {
   test('서로 다른 세션은 다른 대화 내용', async ({ page }) => {
     await login(page);
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const sessions = await getSessionsList(page, projectId);
-    if (sessions.length < 2) return;
+    // 세션이 1개뿐이면 이 테스트는 성립하지 않는다 — 조용한 통과 대신 skip으로 드러낸다
+    test.skip(sessions.length < 2, '세션 격리 테스트에는 세션이 2개 이상 필요하다');
 
     // 첫 번째 세션
     await page.goto(`/projects/${projectId}/sessions/${sessions[0].id}`);
@@ -178,9 +192,8 @@ test.describe('코드 에디터', () => {
 
   test('에디터 토글 → 파일 탐색기 표시', async ({ page }) => {
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const sessions = await getSessionsList(page, projectId);
-    if (sessions.length === 0) return;
+    expect(sessions.length, 'E2E 실행에는 세션이 최소 1개 필요하다').toBeGreaterThan(0);
 
     await page.goto(`/projects/${projectId}/sessions/${sessions[0].id}`);
     await page.waitForTimeout(1000);
@@ -199,9 +212,8 @@ test.describe('코드 에디터', () => {
 
   test('파일 클릭 → Monaco 에디터에서 열림', async ({ page }) => {
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const sessions = await getSessionsList(page, projectId);
-    if (sessions.length === 0) return;
+    expect(sessions.length, 'E2E 실행에는 세션이 최소 1개 필요하다').toBeGreaterThan(0);
 
     await page.goto(`/projects/${projectId}/sessions/${sessions[0].id}`);
     await page.waitForTimeout(1000);
@@ -221,9 +233,8 @@ test.describe('코드 에디터', () => {
 
   test('패널 닫기 → 상태 유지', async ({ page }) => {
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const sessions = await getSessionsList(page, projectId);
-    if (sessions.length === 0) return;
+    expect(sessions.length, 'E2E 실행에는 세션이 최소 1개 필요하다').toBeGreaterThan(0);
 
     await page.goto(`/projects/${projectId}/sessions/${sessions[0].id}`);
     await page.waitForTimeout(1000);
@@ -250,9 +261,8 @@ test.describe('터미널', () => {
 
   test('터미널 토글 → 탭 생성', async ({ page }) => {
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const sessions = await getSessionsList(page, projectId);
-    if (sessions.length === 0) return;
+    expect(sessions.length, 'E2E 실행에는 세션이 최소 1개 필요하다').toBeGreaterThan(0);
 
     await page.goto(`/projects/${projectId}/sessions/${sessions[0].id}`);
     await page.waitForTimeout(1000);
@@ -266,9 +276,8 @@ test.describe('터미널', () => {
 
   test('새 탭 추가 → 탭 2개', async ({ page }) => {
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const sessions = await getSessionsList(page, projectId);
-    if (sessions.length === 0) return;
+    expect(sessions.length, 'E2E 실행에는 세션이 최소 1개 필요하다').toBeGreaterThan(0);
 
     await page.goto(`/projects/${projectId}/sessions/${sessions[0].id}`);
     await page.waitForTimeout(1000);
@@ -292,10 +301,9 @@ test.describe('파일 브라우저 API', () => {
   test('GET /api/tree/browse → 파일 목록', async ({ page }) => {
     await login(page);
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const cookie = await getCookieStr(page);
 
-    const res = await page.request.get(`/api/tree/browse?projectId=${projectId}`, {
+    const res = await page.request.get(`${API}/api/tree/browse?projectId=${projectId}`, {
       headers: { Cookie: cookie },
     });
     expect(res.status()).toBe(200);
@@ -311,10 +319,9 @@ test.describe('파일 브라우저 API', () => {
   test('경로 트래버설 차단 → 403', async ({ page }) => {
     await login(page);
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const cookie = await getCookieStr(page);
 
-    const res = await page.request.get(`/api/tree/browse?projectId=${projectId}&path=../../etc`, {
+    const res = await page.request.get(`${API}/api/tree/browse?projectId=${projectId}&path=../../etc`, {
       headers: { Cookie: cookie },
     });
     expect(res.status()).toBe(403);
@@ -323,11 +330,10 @@ test.describe('파일 브라우저 API', () => {
   test('파일 읽기 → 200', async ({ page }) => {
     await login(page);
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const cookie = await getCookieStr(page);
 
     const res = await page.request.get(
-      `/api/tree/file?projectId=${projectId}&path=${encodeURIComponent('CLAUDE.md')}`,
+      `${API}/api/tree/file?projectId=${projectId}&path=${encodeURIComponent('CLAUDE.md')}`,
       { headers: { Cookie: cookie } },
     );
     expect(res.status()).toBe(200);
@@ -339,11 +345,10 @@ test.describe('파일 브라우저 API', () => {
   test('민감 파일 읽기 차단 → 403', async ({ page }) => {
     await login(page);
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const cookie = await getCookieStr(page);
 
     const res = await page.request.get(
-      `/api/tree/file?projectId=${projectId}&path=${encodeURIComponent('.env')}`,
+      `${API}/api/tree/file?projectId=${projectId}&path=${encodeURIComponent('.env')}`,
       { headers: { Cookie: cookie } },
     );
     expect(res.status()).toBe(403);
@@ -357,7 +362,6 @@ test.describe('존재하지 않는 페이지', () => {
   test('잘못된 세션 ID → 에러 또는 빈 상태', async ({ page }) => {
     await login(page);
     const projectId = await getProjectId(page);
-    if (!projectId) return;
     const fakeSessionId = '00000000-0000-0000-0000-000000000000';
     await page.goto(`/projects/${projectId}/sessions/${fakeSessionId}`);
     await page.waitForTimeout(2000);

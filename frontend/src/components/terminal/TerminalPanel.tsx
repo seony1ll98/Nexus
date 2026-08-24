@@ -25,6 +25,9 @@ function genTabId(): string {
   return `term-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** 첫 번째 탭 — 서버/클라이언트 렌더가 일치하도록 ID를 고정한다 */
+const FIRST_TAB: TerminalTab = { id: 'term-1', label: '터미널 1' };
+
 export function TerminalPanel({
   isOpen,
   height,
@@ -37,18 +40,11 @@ export function TerminalPanel({
   const [isDragging, setIsDragging] = useState(false);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
 
-  // 탭 상태 — 패널 최초 오픈 시 첫 탭 자동 생성
-  const [tabs, setTabs] = useState<TerminalTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string>('');
-
-  // 패널이 열리면 탭이 하나도 없을 때 자동 생성
-  useEffect(() => {
-    if (isOpen && tabs.length === 0) {
-      const firstTab: TerminalTab = { id: genTabId(), label: '터미널 1' };
-      setTabs([firstTab]);
-      setActiveTabId(firstTab.id);
-    }
-  }, [isOpen, tabs.length]);
+  // 탭 상태 — 첫 탭은 마운트 시 바로 준비한다.
+  // effect 안에서 setState로 만들면 불필요한 연쇄 렌더가 발생하므로 초기값으로 둔다.
+  // 첫 탭 ID는 SSR/클라이언트가 동일해야 하므로 고정값을 쓴다(이후 탭만 genTabId 사용).
+  const [tabs, setTabs] = useState<TerminalTab[]>([FIRST_TAB]);
+  const [activeTabId, setActiveTabId] = useState<string>(FIRST_TAB.id);
 
   /** 새 탭 추가 */
   const handleNewTab = useCallback(() => {
@@ -63,18 +59,25 @@ export function TerminalPanel({
 
   /** 탭 닫기 */
   const handleCloseTab = useCallback((id: string) => {
-    setTabs((prev) => {
-      const idx = prev.findIndex((t) => t.id === id);
-      if (idx < 0) return prev;
-      const newTabs = prev.filter((t) => t.id !== id);
-      // 활성 탭이 닫힌 경우 인접 탭으로 이동
-      if (id === activeTabId && newTabs.length > 0) {
-        const nextActive = newTabs[Math.min(idx, newTabs.length - 1)];
-        setActiveTabId(nextActive.id);
-      }
-      return newTabs;
-    });
-  }, [activeTabId]);
+    const idx = tabs.findIndex((t) => t.id === id);
+    if (idx < 0) return;
+    const remaining = tabs.filter((t) => t.id !== id);
+
+    // 마지막 탭을 닫으면 패널 자체를 닫고, 다음 오픈을 위해 새 탭을 하나 준비해 둔다
+    if (remaining.length === 0) {
+      const fresh: TerminalTab = { id: genTabId(), label: '터미널 1' };
+      setTabs([fresh]);
+      setActiveTabId(fresh.id);
+      onClose();
+      return;
+    }
+
+    setTabs(remaining);
+    // 활성 탭이 닫힌 경우 인접 탭으로 이동
+    if (id === activeTabId) {
+      setActiveTabId(remaining[Math.min(idx, remaining.length - 1)].id);
+    }
+  }, [tabs, activeTabId, onClose]);
 
   /** 드래그 시작 — mousedown 이벤트 */
   const handleDragStart = useCallback(

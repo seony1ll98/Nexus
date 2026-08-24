@@ -6,11 +6,6 @@ import { apiFetch } from '@/lib/api';
 import { useRealtimeStore } from '@/stores/realtimeStore';
 import type { Notification } from '@/types/realtime';
 
-/** 알림 목록 응답 형식 */
-interface NotificationsResponse {
-  notifications: Notification[];
-}
-
 /** 알림 목록 조회 쿼리 키 */
 export const NOTIFICATIONS_KEY = ['notifications'] as const;
 

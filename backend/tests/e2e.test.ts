@@ -1,7 +1,7 @@
 // E2E 테스트 — 실제 서버에 HTTP 요청을 보내 핵심 기능 검증
 // 실행: cd backend && npm test
 // 전제조건: 서버가 localhost:8080에서 실행 중이어야 함
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
 const API = process.env.TEST_API_URL || 'http://localhost:8080';
 const TEST_EMAIL = process.env.TEST_EMAIL ?? '';
@@ -11,8 +11,17 @@ if (!TEST_EMAIL || !TEST_PASSWORD) {
   throw new Error('TEST_EMAIL, TEST_PASSWORD 환경변수가 필요합니다');
 }
 
+/**
+ * 권한 회귀 테스트용 비멤버 계정.
+ * 어느 프로젝트에도 소속되지 않은 일반 멤버로, 세션 라우트 접근이 전부 차단되어야 한다.
+ */
+const OUTSIDER_EMAIL = process.env.TEST_OUTSIDER_EMAIL ?? 'e2e-outsider@nexus.local';
+const OUTSIDER_PASSWORD = process.env.TEST_OUTSIDER_PASSWORD ?? 'E2eOutsider!2026';
+const OUTSIDER_NAME = 'E2E 비멤버';
+
 /** 쿠키 저장소 */
 let sessionCookie = '';
+let outsiderCookie = '';
 let currentUserId = '';
 let projectId = '';
 let testSessionId = '';
@@ -66,6 +75,31 @@ beforeAll(async () => {
       testSessionId = sessions[0].id;
     }
   }
+
+  // 비멤버 계정 준비 — 권한 회귀 테스트용
+  // 이미 존재하면 409가 나므로 무시하고 로그인만 시도한다
+  await authFetch('/api/users', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: OUTSIDER_NAME,
+      email: OUTSIDER_EMAIL,
+      password: OUTSIDER_PASSWORD,
+      role: 'member',
+    }),
+  });
+
+  const outRes = await fetch(`${API}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: OUTSIDER_EMAIL, password: OUTSIDER_PASSWORD }),
+  });
+  if (outRes.status !== 200) {
+    throw new Error(`비멤버 로그인 실패: ${outRes.status} — ${await outRes.text()}`);
+  }
+  const outCookies = outRes.headers.getSetCookie?.() ?? [outRes.headers.get('set-cookie') ?? ''];
+  const outCookie = outCookies.find((c: string) => c.includes('connect.sid'));
+  if (!outCookie) throw new Error('비멤버 세션 쿠키 없음');
+  outsiderCookie = outCookie.split(';')[0];
 });
 
 // ────────────────────────────────────────────
@@ -297,5 +331,91 @@ describe('에러 응답 형식', () => {
     expect(body.error).toBeDefined();
     expect(typeof body.error.code).toBe('string');
     expect(typeof body.error.message).toBe('string');
+  });
+});
+
+// ────────────────────────────────────────────
+// 11. 세션 권한 경계 (회귀 방지)
+//
+// 세션 하위 라우트는 sessions/index.ts의 공통 preHandler 훅에서 일괄 검증된다.
+// 라우트를 추가하면서 훅 등록 순서를 잘못 두면 이 묶음이 실패한다.
+// ────────────────────────────────────────────
+describe('세션 권한 경계 — 비멤버 차단', () => {
+  /**
+   * 프로브 전용 세션.
+   * DELETE/PATCH/merge까지 검증하므로, 가드가 깨졌을 때 실제 작업 세션이
+   * 손상되지 않도록 일회용 세션을 따로 만들어 쓴다.
+   */
+  let probeSessionId = '';
+  /** 과차단 회귀 확인용 — 파괴적 프로브의 영향을 받지 않도록 별도로 만든다 */
+  let memberSessionId = '';
+
+  /** 프로젝트 직속 세션 생성 (worktree 없이 가볍게) */
+  async function createSession(title: string): Promise<string> {
+    const res = await authFetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ projectId, title }),
+    });
+    if (res.status !== 201 && res.status !== 200) {
+      throw new Error(`세션 생성 실패(${title}): ${res.status} — ${await res.text()}`);
+    }
+    return (await res.json()).id;
+  }
+
+  beforeAll(async () => {
+    if (!projectId) throw new Error('프로젝트가 없습니다');
+    probeSessionId = await createSession('E2E 권한 프로브 세션');
+    memberSessionId = await createSession('E2E 멤버 접근 확인 세션');
+  });
+
+  afterAll(async () => {
+    // 임시 세션 정리 (이미 삭제되었으면 무시)
+    for (const id of [probeSessionId, memberSessionId]) {
+      if (id) await authFetch(`/api/sessions/${id}`, { method: 'DELETE' }).catch(() => null);
+    }
+  });
+
+  /** 비멤버 쿠키로 호출 */
+  async function asOutsider(path: string, method = 'GET', body?: unknown): Promise<Response> {
+    const headers: Record<string, string> = { Cookie: outsiderCookie };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    return fetch(`${API}${path}`, {
+      method,
+      headers,
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+  }
+
+  /** 검증 대상 — 세션 :id 하위 라우트 전체 */
+  const routes: Array<[string, string, string, unknown?]> = [
+    ['세션 상세',   'GET',    '',              undefined],
+    ['메시지 조회', 'GET',    '/messages',     undefined],
+    ['채팅 전송',   'POST',   '/chat',         { message: '권한 검증' }],
+    ['락 획득',     'POST',   '/lock',         undefined],
+    ['락 해제',     'POST',   '/unlock',       undefined],
+    ['락 요청',     'POST',   '/lock-request', { message: '부탁' }],
+    ['merge',       'POST',   '/merge',        undefined],
+    ['중단',        'POST',   '/abort',        undefined],
+    ['세션 수정',   'PATCH',  '',              { title: '변경 시도' }],
+    ['세션 삭제',   'DELETE', '',              undefined],
+  ];
+
+  for (const [label, method, suffix, body] of routes) {
+    it(`${label} — 비멤버는 FORBIDDEN`, async () => {
+      const res = await asOutsider(`/api/sessions/${probeSessionId}${suffix}`, method, body);
+      const where = `${method} /api/sessions/:id${suffix}`;
+      expect(res.status, where).toBe(403);
+      // 상태 코드만 보면 CLAUDE_NOT_CONNECTED 같은 다른 403에 속을 수 있으므로
+      // 권한 거부 코드 자체를 확인한다
+      const errBody = await res.json();
+      expect(errBody.error?.code, `${where} — 403의 사유`).toBe('FORBIDDEN');
+    });
+  }
+
+  it('정상 멤버는 그대로 접근 가능 (과차단 회귀 방지)', async () => {
+    const detail = await authFetch(`/api/sessions/${memberSessionId}`);
+    expect(detail.status).toBe(200);
+    const messages = await authFetch(`/api/sessions/${memberSessionId}/messages`);
+    expect(messages.status).toBe(200);
   });
 });

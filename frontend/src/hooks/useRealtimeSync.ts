@@ -49,7 +49,11 @@ export function useRealtimeSync({ projectId, sessionId }: UseRealtimeSyncOptions
   const handlersRef = useRef({
     setLock, setOnlineUsers, addNotification, queryClient, user,
   });
-  handlersRef.current = { setLock, setOnlineUsers, addNotification, queryClient, user };
+  // 렌더 중 ref를 수정하면 React가 경고한다(react-hooks/refs).
+  // 커밋 이후에 갱신해도 구독 콜백은 항상 최신 값을 읽으므로 동작은 동일하다.
+  useEffect(() => {
+    handlersRef.current = { setLock, setOnlineUsers, addNotification, queryClient, user };
+  });
 
   // 단일 구독 — 마운트 시 1회만 실행, 언마운트 시 정리
   useEffect(() => {

@@ -1,29 +1,26 @@
 'use client';
 // 오프라인 상태 감지 배너 — navigator.onLine + online/offline 이벤트
 
-import { useState, useEffect } from 'react';
+import { useSyncExternalStore } from 'react';
 import { WifiOff } from 'lucide-react';
+
+/** online/offline 이벤트 구독 — 브라우저 외부 상태이므로 useSyncExternalStore를 사용 */
+function subscribeToNetwork(onChange: () => void) {
+  window.addEventListener('online', onChange);
+  window.addEventListener('offline', onChange);
+  return () => {
+    window.removeEventListener('online', onChange);
+    window.removeEventListener('offline', onChange);
+  };
+}
 
 /** 네트워크 연결이 끊길 때 상단에 표시되는 빨간 배너 */
 export function OfflineBanner() {
-  // SSR 시 기본값 true (서버에서는 온라인으로 가정)
-  const [isOnline, setIsOnline] = useState(true);
-
-  useEffect(() => {
-    // 초기 상태 동기화 — 클라이언트 마운트 후 실제 상태 반영
-    setIsOnline(navigator.onLine);
-
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
+  const isOnline = useSyncExternalStore(
+    subscribeToNetwork,
+    () => navigator.onLine, // 클라이언트 스냅샷
+    () => true,             // SSR 스냅샷 — 서버에서는 온라인으로 가정
+  );
 
   // 온라인 상태면 렌더링하지 않음
   if (isOnline) return null;

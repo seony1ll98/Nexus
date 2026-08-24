@@ -80,7 +80,7 @@ export function ToolUseCard({ toolUse }: ToolUseCardProps) {
             )}
             {/* 도구 출력 — 파일 내용, bash 출력 등 */}
             {toolUse.output && (
-              <ToolOutput tool={toolUse.tool} output={toolUse.output} isError={toolUse.isError} />
+              <ToolOutput output={toolUse.output} isError={toolUse.isError} />
             )}
           </div>
         </CollapsibleContent>
@@ -132,7 +132,7 @@ function ToolInput({ tool, input }: { tool: string; input: Record<string, unknow
 }
 
 /** 도구 출력 표시 — 파일 내용, bash 출력 등 */
-function ToolOutput({ tool, output, isError }: { tool: string; output: string; isError?: boolean }) {
+function ToolOutput({ output, isError }: { output: string; isError?: boolean }) {
   if (!output) return null;
 
   // 출력이 짧은 경우 (경로만 표시된 경우 등) 표시 안 함
