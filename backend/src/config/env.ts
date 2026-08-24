@@ -18,6 +18,13 @@ interface Env {
   RATE_LIMIT_MAX: number;
   /** 로그인 레이트 리밋 — IP당 1분 최대 시도 수 (기본 5) */
   LOGIN_RATE_LIMIT_MAX: number;
+  /**
+   * 세션 쿠키에 Secure 속성을 붙일지 여부.
+   * 기본값은 NODE_ENV === 'production'이지만, HTTPS 없이 운영하는 경우
+   * Secure 쿠키는 브라우저가 저장하지 않아 로그인 자체가 불가능해진다.
+   * 그런 환경에서는 COOKIE_SECURE=false로 명시적으로 끌 수 있다.
+   */
+  COOKIE_SECURE: boolean;
   // DB 민감 데이터 암호화 키 — 64자 hex (32바이트). 미설정 시 claudeAccount 평문 저장
   ENCRYPTION_KEY?: string;
   // 알리고 SMS — optional (미설정 시 SMS 비활성화)
@@ -47,6 +54,9 @@ function loadEnv(): Env {
     // 기본값은 기존 하드코딩 값과 동일 — E2E/CI에서만 높여 쓴다
     RATE_LIMIT_MAX: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
     LOGIN_RATE_LIMIT_MAX: parseInt(process.env.LOGIN_RATE_LIMIT_MAX || '5', 10),
+    COOKIE_SECURE: process.env.COOKIE_SECURE !== undefined
+      ? process.env.COOKIE_SECURE === 'true'
+      : process.env.NODE_ENV === 'production',
     ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
     ALIGO_API_KEY: process.env.ALIGO_API_KEY,
     ALIGO_USER_ID: process.env.ALIGO_USER_ID,

@@ -17,6 +17,18 @@ function statusToCode(status: number): string {
 }
 
 const errorHandlerPlugin: FastifyPluginAsync = async (fastify) => {
+  // 등록되지 않은 경로의 404도 프로젝트 공통 형식으로 응답한다.
+  // 기본 응답은 { message, error, statusCode } 형태라 프론트의 apiFetch가
+  // error.code를 읽지 못해 "알 수 없는 오류"로 표시됐다.
+  fastify.setNotFoundHandler((request, reply) => {
+    return reply.code(404).send({
+      error: {
+        code: 'NOT_FOUND',
+        message: `요청한 경로를 찾을 수 없습니다: ${request.method} ${request.url}`,
+      },
+    });
+  });
+
   fastify.setErrorHandler((err: FastifyError, _request, reply) => {
     // Prisma 알려진 요청 에러 변환
     if (err instanceof Prisma.PrismaClientKnownRequestError) {

@@ -421,6 +421,24 @@ describe('에러 응답 형식', () => {
     expect(typeof body.error.code).toBe('string');
     expect(typeof body.error.message).toBe('string');
   });
+
+  /**
+   * 등록되지 않은 경로의 404 (F14 회귀 방지).
+   *
+   * 위 테스트는 createHttpError 경로만 확인해서, Fastify 기본 404가
+   * { message, error, statusCode } 형태로 나가는 것을 놓치고 있었다.
+   * 프론트의 apiFetch는 error.code를 읽으므로 그대로면 "알 수 없는 오류"가 뜬다.
+   */
+  it('등록되지 않은 경로의 404도 공통 형식', async () => {
+    const res = await authFetch('/api/이런-경로는-없다');
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error, '공통 에러 형식이 아니다').toBeDefined();
+    expect(body.error.code).toBe('NOT_FOUND');
+    expect(typeof body.error.message).toBe('string');
+    // Fastify 기본 형식의 잔재가 없어야 한다
+    expect(body.statusCode).toBeUndefined();
+  });
 });
 
 // ────────────────────────────────────────────

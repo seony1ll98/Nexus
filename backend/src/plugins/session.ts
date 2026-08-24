@@ -31,7 +31,8 @@ export default fp(async (fastify) => {
     cookieName: 'connect.sid',
     cookie: {
       httpOnly: true,
-      secure: env.NODE_ENV === 'production',
+      // HTTPS 없이 운영하면 Secure 쿠키가 저장되지 않아 로그인이 막힌다 — COOKIE_SECURE로 조정
+      secure: env.COOKIE_SECURE,
       sameSite: 'lax',
       maxAge: 24 * 60 * 60 * 1000, // 24시간
       path: '/',

@@ -33,7 +33,7 @@ cp backend/.env.example backend/.env
 # DATABASE_URL, SESSION_SECRET 등 실제 값으로 수정
 
 # 프론트엔드
-cp frontend/.env.local.example frontend/.env.local
+cp frontend/.env.example frontend/.env.local
 # NEXT_PUBLIC_API_URL을 실제 서버 주소로 수정
 ```
 

@@ -4,6 +4,13 @@ import { git as openRepo } from '../lib/git.js';
 import prisma from '../lib/prisma.js';
 import { socketService } from './socket.service.js';
 
+/**
+ * 한 번에 훑어볼 최근 커밋 수.
+ * 전체 이력을 매번 대조하면 저장소가 커질수록 비용이 늘어나므로 상한을 둔다.
+ * 스트림 종료마다 호출되므로 이 범위를 넘길 만큼 밀리는 상황은 없다.
+ */
+const MAX_SCAN_COMMITS = 200;
+
 /** 커밋 단건 파싱 결과 */
 interface CommitStatResult {
   filesChanged: string[];
@@ -56,23 +63,18 @@ class CommitSyncService {
   ): Promise<void> {
     const git = openRepo(worktreePath);
 
-    // DB에서 마지막 동기화된 커밋 조회
-    const lastCommit = await prisma.commit.findFirst({
-      where: { projectId },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    // git log 조회 — 마지막 커밋 이후 또는 전체
-    let logArgs: string[];
-    if (lastCommit?.hash) {
-      logArgs = [`${lastCommit.hash}..HEAD`];
-    } else {
-      logArgs = ['HEAD'];
-    }
-
+    // ────────────────────────────────────────────
+    // 최근 커밋을 훑고, DB에 없는 것만 추가한다.
+    //
+    // 예전에는 "커밋 날짜가 가장 최신인 DB 레코드"를 기준으로 `hash..HEAD`를 돌렸다.
+    // 그런데 여러 세션이 각자의 브랜치에서 병렬로 커밋하면 커밋 날짜 순서와
+    // 브랜치별 도달 가능 순서가 어긋나, 기준점보다 "과거 날짜"인 새 커밋이
+    // 범위에서 빠져 영영 동기화되지 않았다.
+    // 해시로 직접 대조하면 순서에 의존하지 않는다.
+    // ────────────────────────────────────────────
     let log;
     try {
-      log = await git.log(logArgs);
+      log = await git.log([`--max-count=${MAX_SCAN_COMMITS}`, 'HEAD']);
     } catch {
       // 커밋이 없는 저장소 등 예외 무시
       return;
@@ -80,8 +82,19 @@ class CommitSyncService {
 
     if (!log.all.length) return;
 
-    // 새 커밋을 DB에 upsert 후 WebSocket 브로드캐스트
-    for (const entry of [...log.all].reverse()) {
+    // 이미 저장된 해시를 한 번에 조회해 중복 작업을 피한다
+    const scannedHashes = log.all.map((c) => c.hash);
+    const known = await prisma.commit.findMany({
+      where: { projectId, hash: { in: scannedHashes } },
+      select: { hash: true },
+    });
+    const knownHashes = new Set(known.map((c) => c.hash));
+
+    const newEntries = log.all.filter((c) => !knownHashes.has(c.hash));
+    if (!newEntries.length) return;
+
+    // 새 커밋을 DB에 upsert 후 WebSocket 브로드캐스트 (오래된 것부터)
+    for (const entry of [...newEntries].reverse()) {
       const stat = await extractCommitStat(worktreePath, entry.hash);
 
       const saved = await prisma.commit.upsert({
