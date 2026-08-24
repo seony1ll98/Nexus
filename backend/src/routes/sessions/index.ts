@@ -8,6 +8,7 @@ import messagesRoute from './messages.js';
 import lockRoutes from './lock.js';
 import mergeRoute from './merge.js';
 import {
+  assertSessionAccess,
   handleList,
   handleCreate,
   handleGetOne,
@@ -29,6 +30,25 @@ const idParamsSchema = {
 };
 
 const sessionRoutes: FastifyPluginAsync = async (fastify) => {
+  // ────────────────────────────────────────────
+  // 세션 라우트 공통 가드 (검문소)
+  // 라우트마다 개별로 붙이면 누락이 생기므로 플러그인 레벨 훅으로 일괄 적용한다.
+  // 반드시 하위 라우트 register()보다 먼저 등록해야 한다 —
+  // Fastify 훅은 "이후에 등록된" 라우트에만 적용되기 때문이다.
+  // 인스턴스 레벨 preHandler는 등록 순서대로, 라우트 레벨 preHandler보다 먼저 실행된다.
+  // ────────────────────────────────────────────
+
+  // 1) 로그인 검증 — request.userId를 설정한다
+  fastify.addHook('preHandler', requireAuth);
+
+  // 2) :id 파라미터가 있는 모든 라우트에 세션 접근 권한 검증
+  //    (프로젝트 멤버십 + admin-only 프로젝트 차단)
+  fastify.addHook('preHandler', async (request) => {
+    const id = (request.params as { id?: string } | undefined)?.id;
+    if (!id) return; // 목록/생성 등 :id가 없는 라우트는 각 핸들러가 검증
+    await assertSessionAccess(id, request.userId);
+  });
+
   // 채팅, 중단, 메시지, 락, merge 라우트 등록
   await fastify.register(chatRoute);
   await fastify.register(abortRoute);

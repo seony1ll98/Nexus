@@ -1,6 +1,6 @@
 // 프로젝트 서비스 레이어
 import prisma from '../lib/prisma.js';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import fs from 'fs/promises';
 import path from 'path';
 

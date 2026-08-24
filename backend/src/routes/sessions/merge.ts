@@ -3,7 +3,6 @@ import { FastifyPluginAsync } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { mergeService } from '../../services/merge.service.js';
 import { commitSyncService } from '../../services/commit-sync.service.js';
-import { assertSessionAccess } from './session.handlers.js';
 import { createHttpError } from '../../lib/errors.js';
 import prisma from '../../lib/prisma.js';
 
@@ -19,11 +18,8 @@ const mergeRoute: FastifyPluginAsync = async (fastify) => {
     preHandler: [requireAuth],
     schema: { params: idParamsSchema },
   }, async (request) => {
+    // 세션 접근 권한은 sessions/index.ts의 공통 preHandler 훅에서 검증된다
     const { id } = request.params;
-    const userId = request.userId;
-
-    // 세션 접근 권한 검증
-    await assertSessionAccess(id, userId);
 
     // 세션 + 프로젝트 조회
     const session = await prisma.session.findUnique({

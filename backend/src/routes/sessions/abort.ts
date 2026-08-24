@@ -2,7 +2,6 @@
 import { FastifyPluginAsync } from 'fastify';
 import { requireAuth } from '../../plugins/auth.js';
 import { claudeService } from '../../services/claude.service.js';
-import { assertSessionAccess } from './session.handlers.js';
 
 interface AbortParams { id: string }
 
@@ -17,10 +16,8 @@ const abortRoute: FastifyPluginAsync = async (fastify) => {
       },
     },
   }, async (request, reply) => {
+    // 세션 접근 권한은 sessions/index.ts의 공통 preHandler 훅에서 검증된다
     const { id: sessionId } = request.params;
-
-    // 세션 프로젝트 멤버십 검증 — 비멤버는 403 반환
-    await assertSessionAccess(sessionId, request.userId);
 
     const aborted = claudeService.abort(sessionId);
 

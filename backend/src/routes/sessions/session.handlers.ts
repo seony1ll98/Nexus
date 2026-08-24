@@ -90,8 +90,7 @@ export async function handleCreate(
 export async function handleGetOne(
   request: FastifyRequest<{ Params: IdParams }>,
 ) {
-  await assertSessionAccess(request.params.id, request.userId);
-
+  // 세션 접근 권한은 sessions/index.ts의 공통 preHandler 훅에서 검증된다
   const session = await sessionService.findById(request.params.id);
   if (!session) throw createHttpError(404, '세션을 찾을 수 없습니다');
 
@@ -102,7 +101,6 @@ export async function handleGetOne(
 export async function handleUpdate(
   request: FastifyRequest<{ Params: IdParams; Body: UpdateBody }>,
 ) {
-  await assertSessionAccess(request.params.id, request.userId);
   return sessionService.update(request.params.id, request.body);
 }
 
@@ -111,7 +109,6 @@ export async function handleDelete(
   request: FastifyRequest<{ Params: IdParams }>,
   reply: FastifyReply,
 ) {
-  await assertSessionAccess(request.params.id, request.userId);
   await sessionService.remove(request.params.id);
   return reply.code(204).send();
 }

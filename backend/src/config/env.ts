@@ -7,6 +7,13 @@ interface Env {
   SESSION_SECRET: string;
   FRONTEND_URL: string;
   NODE_ENV: 'development' | 'production';
+  /**
+   * 신뢰할 리버스 프록시 주소 목록 (쉼표 구분).
+   * Fastify trustProxy에 그대로 전달된다 — 여기 없는 주소가 보낸
+   * X-Forwarded-For는 무시되므로 IP 위조를 막을 수 있다.
+   * 기본값: 같은 호스트의 Nginx만 신뢰
+   */
+  TRUSTED_PROXIES: string[];
   // DB 민감 데이터 암호화 키 — 64자 hex (32바이트). 미설정 시 claudeAccount 평문 저장
   ENCRYPTION_KEY?: string;
   // 알리고 SMS — optional (미설정 시 SMS 비활성화)
@@ -29,6 +36,10 @@ function loadEnv(): Env {
     SESSION_SECRET: process.env.SESSION_SECRET!,
     FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
     NODE_ENV: (process.env.NODE_ENV as Env['NODE_ENV']) || 'development',
+    TRUSTED_PROXIES: (process.env.TRUSTED_PROXIES || '127.0.0.1,::1')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
     ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
     ALIGO_API_KEY: process.env.ALIGO_API_KEY,
     ALIGO_USER_ID: process.env.ALIGO_USER_ID,

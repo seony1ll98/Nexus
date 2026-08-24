@@ -20,9 +20,22 @@ import { registerSocketPlugin } from './plugins/socket.js';
 import { socketService } from './services/socket.service.js';
 import { lockService } from './services/lock.service.js';
 import { pruneExpiredPkce } from './lib/oauth-pkce-store.js';
+import { pruneExpiredInternalTokens } from './lib/internal-token.js';
 import { terminalService } from './services/terminal.service.js';
 
-const app = Fastify({ logger: true });
+/**
+ * trustProxy를 "신뢰할 프록시 홉"으로 한정한다.
+ *
+ * Nginx 리버스 프록시 뒤에서는 소켓 주소가 항상 127.0.0.1이 되어,
+ * request.ip 기반 판정(rate limit, 내부 API의 localhost 검사)이 전부 무력화된다.
+ * 반대로 trustProxy: true로 열어두면 클라이언트가 X-Forwarded-For를 위조할 수 있다.
+ * 신뢰 목록을 로컬 홉으로 좁히면 Nginx가 덧붙인 실제 클라이언트 IP만 채택된다.
+ *
+ * Nginx 측에는 다음 설정이 필요하다:
+ *   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+ *   proxy_set_header X-Forwarded-Proto $scheme;
+ */
+const app = Fastify({ logger: true, trustProxy: env.TRUSTED_PROXIES });
 
 // 전역 에러 핸들러 플러그인 — Prisma 에러 변환 + 일관된 응답 형식
 await app.register(errorHandlerPlugin);
@@ -112,9 +125,10 @@ const start = async () => {
       });
     }, 60_000);
 
-    // 만료된 OAuth PKCE 항목 정리 타이머 — 5분마다 실행
+    // 만료된 OAuth PKCE 항목 + 내부 API 토큰 정리 타이머 — 5분마다 실행
     pkceCleanupInterval = setInterval(() => {
       pruneExpiredPkce();
+      pruneExpiredInternalTokens();
     }, 5 * 60_000);
   } catch (err) {
     app.log.error(err);

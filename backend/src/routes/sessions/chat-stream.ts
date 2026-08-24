@@ -7,6 +7,7 @@ import { messageService } from '../../services/message.service.js';
 import { commitSyncService } from '../../services/commit-sync.service.js';
 import { externalNotifyService } from '../../services/external-notify.service.js';
 import { lockService } from '../../services/lock.service.js';
+import { revokeInternalToken } from '../../lib/internal-token.js';
 import prisma from '../../lib/prisma.js';
 
 /** 커밋 동기화 및 외부 알림에 필요한 세션 컨텍스트 */
@@ -117,6 +118,8 @@ export function handleChatStream(
     emitter.on('error', (errMsg: string) => {
       streamEnded = true;
       clearTimeout(streamTimeout);
+      // 내부 API 토큰 폐기 — 스트림이 끝나면 더 이상 유효하지 않다
+      revokeInternalToken(sessionId);
       safeSend(reply, clientDisconnected, 'system', { subtype: 'error', message: errMsg });
       if (!clientDisconnected) reply.raw.end();
       resolve();
@@ -125,6 +128,8 @@ export function handleChatStream(
     emitter.on('close', async () => {
       streamEnded = true;
       clearTimeout(streamTimeout);
+      // 내부 API 토큰 폐기 — 스트림이 끝나면 더 이상 유효하지 않다
+      revokeInternalToken(sessionId);
       try {
         // AI 응답 메시지 저장 — 모든 세션 공통으로 DB에 저장 (DB가 source of truth)
         let messageId: string | null = null;

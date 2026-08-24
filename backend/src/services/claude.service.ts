@@ -1,8 +1,16 @@
 // Claude Code CLI 래핑 서비스 — 프로세스 관리 + stream-json 파싱
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, type ChildProcess, type ChildProcessByStdio } from 'child_process';
+import type { Readable, Writable } from 'stream';
 import { EventEmitter } from 'events';
 import { createStreamHandler } from '../lib/stream-parser.js';
 import { claudeAuthService } from './claude-auth.service.js';
+import { issueInternalToken } from '../lib/internal-token.js';
+
+/**
+ * stdio를 모두 pipe로 스폰한 CLI 프로세스 타입.
+ * stdin/stdout/stderr가 null이 아님이 타입으로 보장된다.
+ */
+type PipedProcess = ChildProcessByStdio<Writable, Readable, Readable>;
 
 /** stream-json 이벤트 기본 타입 */
 export interface StreamEvent {
@@ -27,6 +35,7 @@ class ClaudeService {
     sessionId: string,
     worktreePath: string,
     ctx: ChatContext,
+    internalToken: string,
   ): string {
     const lines = [
       `[Nexus 플랫폼 컨텍스트]`,
@@ -44,9 +53,10 @@ class ClaudeService {
       ``,
       `[사용 가능한 명령]`,
       `사용자가 "merge해줘", "main에 반영해줘" 등 merge를 요청하면, 아래 명령을 Bash로 실행하세요:`,
-      `curl -s -X POST http://localhost:8080/api/internal/sessions/${sessionId}/merge`,
-      `이 명령은 현재 브랜치의 변경사항을 main 브랜치에 merge합니다. 세션과 워크트리는 유지되므로 merge 후에도 계속 작업할 수 있습니다.`,
+      `curl -s -X POST http://localhost:8080/api/internal/sessions/${sessionId}/merge -H "X-Internal-Token: ${internalToken}"`,
+      `이 명령은 현재 브랜치의 변경사항을 기본 브랜치에 merge합니다. 세션과 워크트리는 유지되므로 merge 후에도 계속 작업할 수 있습니다.`,
       `merge 전에 반드시 모든 변경사항을 git commit 하세요.`,
+      `이 토큰은 현재 세션에서만, 이번 작업 동안만 유효합니다. 토큰 값을 사용자에게 출력하거나 파일에 기록하지 마세요.`,
     ];
 
     return lines.join('\n');
@@ -79,11 +89,14 @@ class ClaudeService {
       delete env.CLAUDE_CONFIG_DIR;
     }
 
+    // 내부 merge API 호출용 1회용 토큰 발급 — 스트림 종료 시 폐기된다
+    const internalToken = issueInternalToken(sessionId);
+
     // claudeSessionId에서 인자 인젝션 방지
     const safeClaudeSessionId = claudeSessionId?.replace(/^--/, '') ?? null;
 
     // 첫 시도: resume 포함
-    const proc = this.spawnClaude(sessionId, message, worktreePath, safeClaudeSessionId, env, context);
+    const proc = this.spawnClaude(sessionId, message, worktreePath, safeClaudeSessionId, env, internalToken, context);
     this.processes.set(sessionId, proc.process);
 
     // resume 실패 감지 — error_during_execution + "No conversation found" 시 재시도
@@ -103,7 +116,7 @@ class ClaudeService {
         proc.process.kill('SIGTERM');
 
         // 새 프로세스 (resume 없이)
-        const retry = this.spawnClaude(sessionId, message, worktreePath, null, env, context);
+        const retry = this.spawnClaude(sessionId, message, worktreePath, null, env, internalToken, context);
         this.processes.set(sessionId, retry.process);
 
         retry.process.stdout.on('data', onData);
@@ -142,12 +155,13 @@ class ClaudeService {
     worktreePath: string,
     claudeSessionId: string | null,
     env: Record<string, string | undefined>,
+    internalToken: string,
     context?: ChatContext,
-  ): { process: ChildProcess } {
+  ): { process: PipedProcess } {
     const args = ['--dangerously-skip-permissions', '--output-format', 'stream-json', '--verbose', '-p'];
 
     if (context) {
-      const prompt = this.buildSystemPrompt(sessionId, worktreePath, context);
+      const prompt = this.buildSystemPrompt(sessionId, worktreePath, context, internalToken);
       args.unshift('--append-system-prompt', prompt);
     }
 
@@ -158,14 +172,12 @@ class ClaudeService {
     const proc = spawn('claude', args, {
       cwd: worktreePath,
       env,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
     });
 
     // stdin으로 메시지 전달
-    if (proc.stdin) {
-      proc.stdin.write(message, 'utf8');
-      proc.stdin.end();
-    }
+    proc.stdin.write(message, 'utf8');
+    proc.stdin.end();
 
     return { process: proc };
   }
