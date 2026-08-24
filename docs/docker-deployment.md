@@ -49,14 +49,60 @@ cp .env.docker.example .env
 
 ```bash
 # 예시 항목 (실제 키/값은 .env.docker.example 참조)
-DATABASE_URL=postgresql://nexus:password@postgres:5432/nexus
+POSTGRES_PASSWORD=DB-비밀번호
 SESSION_SECRET=랜덤-시크릿-문자열
-CLAUDE_CONFIGS_DIR=/data/claude-configs
-PROJECTS_DIR=/data/projects
-WORKTREES_DIR=/data/projects-wt
+ADMIN_SEED_PASSWORD=최초-관리자-비밀번호   # ← 최초 배포 시 반드시 설정
+FRONTEND_URL=http://localhost:3000
 ```
 
 > **주의**: `.env` 파일은 절대 Git에 커밋하지 않는다. `.gitignore`에 포함되어 있는지 확인한다.
+
+---
+
+## 최초 로그인
+
+Nexus에는 회원가입 기능이 없다. 계정은 관리자가 만들어 배포하며,
+그 최초 관리자 계정은 컨테이너가 처음 뜰 때 시드로 생성된다.
+
+1. `.env`에 `ADMIN_SEED_PASSWORD`를 설정한다.
+2. `docker compose up -d`로 기동하면 엔트리포인트가 관리자 계정을 만든다.
+3. `admin@nexus.com` + 설정한 비밀번호로 로그인한 뒤 **즉시 비밀번호를 변경한다.**
+
+```bash
+# 시드가 실행됐는지 확인
+docker compose logs backend | grep -A1 "관리자 계정"
+```
+
+`ADMIN_SEED_PASSWORD`를 설정하지 않으면 시드를 건너뛰며, 이 경우
+**로그인할 수 있는 계정이 하나도 없는 상태로 서비스가 뜬다.** 로그에 안내가 출력된다.
+
+계정이 이미 있으면 시드는 아무 것도 하지 않는다(비밀번호를 덮어쓰지 않는다).
+따라서 재기동을 반복해도 안전하다.
+
+---
+
+## Nginx 리버스 프록시를 앞단에 둘 경우
+
+프록시 뒤에서는 모든 요청의 출발지가 `127.0.0.1`로 보인다. 그대로 두면
+레이트 리밋이 팀 전체 공용이 되고, 내부 전용 API의 접근 제한도 무력화된다.
+
+Nginx 쪽에 실제 클라이언트 IP를 전달하도록 설정한다:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+
+# 내부 전용 API는 외부에 노출하지 않는다
+location /api/internal { return 404; }
+```
+
+백엔드에는 신뢰할 프록시 주소를 지정한다(기본값이 로컬 홉이므로 같은 호스트면 그대로 두면 된다):
+
+```env
+TRUSTED_PROXIES=127.0.0.1,::1
+```
+
+여기 등록되지 않은 출발지가 붙인 `X-Forwarded-For`는 무시되므로 IP 위조는 통하지 않는다.
 
 ---
 

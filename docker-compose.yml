@@ -38,6 +38,11 @@ services:
       PORT: 8080
       NODE_ENV: production
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # 최초 기동 시 관리자 계정을 만든다. 계정이 이미 있으면 무시된다.
+      # 미설정이면 시드를 건너뛰므로 로그인할 계정이 없는 상태로 뜬다.
+      ADMIN_SEED_PASSWORD: ${ADMIN_SEED_PASSWORD:-}
+      # 신뢰할 리버스 프록시 (Nginx를 앞단에 둘 때 실제 클라이언트 IP 인식용)
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-127.0.0.1,::1}
       CLAUDE_CONFIGS_DIR: /data/claude-configs
       PROJECTS_DIR: /data/projects
       PROJECTS_WT_DIR: /data/projects-wt
